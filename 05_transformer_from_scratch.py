@@ -2,10 +2,10 @@
 Defines a "TransformerFull" class that includes both an embedding for the vocabulary and
 a positional encoding.
 
-Also correctly implements weight sharing between the embedding and the final linear
-layer.
+Also includes custom TransformerEncoder and TransformerDecoder.
 """
 
+import copy
 import math
 
 import torch
@@ -14,6 +14,11 @@ from torch import Tensor
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 import torch.nn.init as init
+from torch.nn.modules import ModuleList
+
+
+def _get_clones(module: nn.Module, N: int) -> ModuleList:
+    return ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
 class PositionalEncoding(nn.Module):
@@ -83,6 +88,40 @@ class PositionalEncoding(nn.Module):
         return x + self.positional_encoding
 
 
+class TransformerEncoderCustom(nn.Module):
+    def __init__(self, encoder_layer: nn.Module, num_layers: int) -> None:
+        super(TransformerEncoderCustom, self).__init__()
+
+        self.num_layers = num_layers
+        self.layers = _get_clones(encoder_layer, num_layers)
+
+    def forward(self, x: Tensor) -> None:
+
+        out = x
+
+        for i in range(self.num_layers):
+            out = self.layers[i](out)
+
+        return out
+
+
+class TransformerDecoderCustom(nn.Module):
+    def __init__(self, decoder_layer: nn.Module, num_layers: int) -> None:
+        super(TransformerDecoderCustom, self).__init__()
+
+        self.num_layers = num_layers
+        self.layers = _get_clones(decoder_layer, num_layers)
+
+    def forward(self, tgt: Tensor, memory: Tensor) -> None:
+
+        out = tgt
+
+        for i in range(self.num_layers):
+            output = self.layers[i](tgt, memory)
+
+        return out
+
+
 class TransformerFull(nn.Module):
     def __init__(
         self,
@@ -98,8 +137,8 @@ class TransformerFull(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead)
         decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead)
 
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_decoder_layers)
+        self.encoder = TransformerEncoderCustom(encoder_layer, num_encoder_layers)
+        self.decoder = TransformerDecoderCustom(decoder_layer, num_decoder_layers)
 
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.positional_encoding = PositionalEncoding(d_model, max_len)

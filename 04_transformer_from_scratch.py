@@ -4,13 +4,15 @@ a positional encoding.
 
 Also includes custom TransformerEncoder and TransformerDecoder.
 """
-
 import copy
 import math
 
 import torch
 import torch.nn as nn
 from torch import Tensor
+import torch.nn.functional as F
+from torch.nn.parameter import Parameter
+import torch.nn.init as init
 from torch.nn.modules import ModuleList
 
 
@@ -140,6 +142,15 @@ class TransformerFull(nn.Module):
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.positional_encoding = PositionalEncoding(d_model, max_len)
 
+        self.output_bias = Parameter(torch.Tensor(vocab_size))
+        self._init_bias()
+
+    def _init_bias(self):
+        # https://github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L79-L84
+        fan_in, _ = init._calculate_fan_in_and_fan_out(self.embedding.weight)
+        bound = 1 / math.sqrt(fan_in)
+        init.uniform_(self.output_bias, -bound, bound)
+
     def forward(self, src: Tensor, tgt: Tensor) -> Tensor:
 
         embeddings = self.embedding(src)
@@ -151,6 +162,7 @@ class TransformerFull(nn.Module):
         tgt_embeddings = self.embedding(tgt)
 
         output = self.decoder(tgt_embeddings, memory)
+        output = F.linear(output, self.embedding.weight, self.output_bias)
 
         return output
 
