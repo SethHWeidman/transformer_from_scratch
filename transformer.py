@@ -1,13 +1,8 @@
-"""
-Defines a "TransformerFull" class that includes both an embedding for the vocabulary and
-a positional encoding.
-
-Also defines custom Transformer encoder and decoder layers. 
-"""
-
-import copy
+# Python standard library
 import math
+import copy
 
+# PyTorch
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -21,8 +16,29 @@ from torch.nn.modules.linear import Linear
 from torch.nn.modules.normalization import LayerNorm
 
 
-def _get_clones(module: nn.Module, N: int) -> ModuleList:
-    return ModuleList([copy.deepcopy(module) for i in range(N)])
+class Transformer1(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        nhead: int,
+        num_encoder_layers: int = 6,
+        num_decoder_layers: int = 6,
+    ):
+        super(Transformer1, self).__init__()
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead)
+
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_decoder_layers)
+
+    def forward(self, src: Tensor, tgt: Tensor) -> None:
+
+        memory = self.encoder(src)
+
+        output = self.decoder(tgt, memory)
+
+        return output
 
 
 class PositionalEncoding(nn.Module):
@@ -79,6 +95,9 @@ class PositionalEncoding(nn.Module):
         # [seq_len x num_features] -> [1 x seq_len x num_features]
         positional_encoding = positional_encoding.unsqueeze(0)
 
+        # Transpose to put sequence length in first position, batch size in second
+        positional_encoding = positional_encoding.transpose(0, 1)
+
         # de-mean
         # due to all the cosine terms starting at 1, and the sine terms starting at
         # 0, the mean of these positional encodings is much greater than 0; adding
@@ -91,6 +110,51 @@ class PositionalEncoding(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return x + self.positional_encoding
 
+
+class Transformer2(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        nhead: int,
+        vocab_size: int,
+        max_len: int,
+        num_encoder_layers: int = 6,
+        num_decoder_layers: int = 6,
+    ) -> None:
+        super(Transformer2, self).__init__()
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead)
+
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_decoder_layers)
+
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(d_model, max_len)
+
+        self.output_bias = Parameter(torch.Tensor(vocab_size))
+        self._init_bias()
+
+    def _init_bias(self):
+        # https://github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L79-L84
+        fan_in, _ = init._calculate_fan_in_and_fan_out(self.embedding.weight)
+        bound = 1 / math.sqrt(fan_in)
+        init.uniform_(self.output_bias, -bound, bound)
+
+    def forward(self, src: Tensor, tgt: Tensor) -> Tensor:
+
+        embeddings = self.embedding(src)
+
+        positional_encoding = self.positional_encoding(embeddings)
+
+        memory = self.encoder(positional_encoding)
+
+        tgt_embeddings = self.embedding(tgt)
+
+        output = self.decoder(tgt_embeddings, memory)
+        output = F.linear(output, self.embedding.weight, self.output_bias)
+
+        return output
 
 class TransformerEncoderCustom(nn.Module):
     def __init__(self, encoder_layer: nn.Module, num_layers: int) -> None:
@@ -125,6 +189,51 @@ class TransformerDecoderCustom(nn.Module):
 
         return out
 
+
+class Transformer3(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        nhead: int,
+        vocab_size: int,
+        max_len: int,
+        num_encoder_layers: int = 6,
+        num_decoder_layers: int = 6,
+    ) -> None:
+        super(Transformer3, self).__init__()
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead)
+
+        self.encoder = TransformerEncoderCustom(encoder_layer, num_encoder_layers)
+        self.decoder = TransformerDecoderCustom(decoder_layer, num_decoder_layers)
+
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(d_model, max_len)
+
+        self.output_bias = Parameter(torch.Tensor(vocab_size))
+        self._init_bias()
+
+    def _init_bias(self):
+        # https://github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L79-L84
+        fan_in, _ = init._calculate_fan_in_and_fan_out(self.embedding.weight)
+        bound = 1 / math.sqrt(fan_in)
+        init.uniform_(self.output_bias, -bound, bound)
+
+    def forward(self, src: Tensor, tgt: Tensor) -> Tensor:
+
+        embeddings = self.embedding(src)
+
+        positional_encoding = self.positional_encoding(embeddings)
+
+        memory = self.encoder(positional_encoding)
+
+        tgt_embeddings = self.embedding(tgt)
+
+        output = self.decoder(tgt_embeddings, memory)
+        output = F.linear(output, self.embedding.weight, self.output_bias)
+
+        return output
 
 class TransformerEncoderLayerCustom(nn.Module):
     def __init__(
@@ -202,7 +311,7 @@ class TransformerDecoderLayerCustom(nn.Module):
         return tgt
 
 
-class TransformerFull(nn.Module):
+class Transformer4(nn.Module):
     def __init__(
         self,
         d_model: int,
@@ -212,7 +321,7 @@ class TransformerFull(nn.Module):
         num_encoder_layers: int = 6,
         num_decoder_layers: int = 6,
     ) -> None:
-        super(TransformerFull, self).__init__()
+        super(Transformer4, self).__init__()
 
         encoder_layer = TransformerEncoderLayerCustom(d_model=d_model, nhead=nhead)
         decoder_layer = TransformerDecoderLayerCustom(d_model=d_model, nhead=nhead)
@@ -248,28 +357,5 @@ class TransformerFull(nn.Module):
         return output
 
 
-if __name__ == "__main__":
-    # source sequence length
-    S = 10
-
-    # target sequence length
-    T = 20
-
-    # batch size
-    N = 32
-
-    # feature size
-    E = 50
-
-    # number of heads
-    H = 5
-
-    # vocab size
-    V = 20000
-
-    src = torch.randint(low=0, high=V, size=(N, T))
-    tgt = torch.randint(low=0, high=V, size=(N, T))
-
-    t = TransformerFull(d_model=E, nhead=H, vocab_size=V, max_len=T)
-    out = t(src, tgt)
-    print(out.shape)
+def _get_clones(module: nn.Module, N: int) -> ModuleList:
+    return ModuleList([copy.deepcopy(module) for i in range(N)])
