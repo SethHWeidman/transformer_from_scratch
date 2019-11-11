@@ -191,7 +191,7 @@ class TransformerDecoderCustom(nn.Module):
         return out
 
 
-class Transformer3(nn.Module):
+class Transformer3(Transformer2):
     def __init__(
         self,
         d_model: int,
@@ -201,7 +201,7 @@ class Transformer3(nn.Module):
         num_encoder_layers: int = 6,
         num_decoder_layers: int = 6,
     ) -> None:
-        super(Transformer3, self).__init__()
+        super(Transformer3, self).__init__(d_model, nhead, vocab_size, max_len)
 
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead)
         decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead)
@@ -214,27 +214,6 @@ class Transformer3(nn.Module):
 
         self.output_bias = Parameter(torch.Tensor(vocab_size))
         self._init_bias()
-
-    def _init_bias(self):
-        # https://github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L79-L84
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.embedding.weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.output_bias, -bound, bound)
-
-    def forward(self, src: Tensor, tgt: Tensor) -> Tensor:
-
-        embeddings = self.embedding(src)
-
-        positional_encoding = self.positional_encoding(embeddings)
-
-        memory = self.encoder(positional_encoding)
-
-        tgt_embeddings = self.embedding(tgt)
-
-        output = self.decoder(tgt_embeddings, memory)
-        output = F.linear(output, self.embedding.weight, self.output_bias)
-
-        return output
 
 
 class TransformerEncoderLayerCustom(nn.Module):
@@ -313,7 +292,7 @@ class TransformerDecoderLayerCustom(nn.Module):
         return tgt
 
 
-class Transformer4(nn.Module):
+class Transformer4(Transformer3):
     def __init__(
         self,
         d_model: int,
@@ -323,7 +302,7 @@ class Transformer4(nn.Module):
         num_encoder_layers: int = 6,
         num_decoder_layers: int = 6,
     ) -> None:
-        super(Transformer4, self).__init__()
+        super(Transformer4, self).__init__(d_model, nhead, vocab_size, max_len)
 
         encoder_layer = TransformerEncoderLayerCustom(d_model=d_model, nhead=nhead)
         decoder_layer = TransformerDecoderLayerCustom(d_model=d_model, nhead=nhead)
@@ -337,26 +316,167 @@ class Transformer4(nn.Module):
         self.output_bias = Parameter(torch.Tensor(vocab_size))
         self._init_bias()
 
-    def _init_bias(self):
-        # https://github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L79-L84
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.embedding.weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.output_bias, -bound, bound)
 
-    def forward(self, src: Tensor, tgt: Tensor) -> Tensor:
+class MultiheadAttentionCustom(nn.Module):
+    def __init__(
+        self, d_model: int, nhead: int, dropout: float = 0,
+    ):
+        super(MultiheadAttentionCustom, self).__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.dropout = dropout
+        self.head_dim = d_model // nhead
 
-        embeddings = self.embedding(src)
+        # we will not assume that the query, key, and value have the same
+        # dimension, even though that will often be true in practice
+        self.kdim = d_model
+        self.vdim = d_model
 
-        positional_encoding = self.positional_encoding(embeddings)
+        self.q_proj_weight = Parameter(torch.Tensor(d_model, d_model))
+        self.k_proj_weight = Parameter(torch.Tensor(d_model, d_model))
+        self.v_proj_weight = Parameter(torch.Tensor(d_model, d_model))
 
-        memory = self.encoder(positional_encoding)
+        self.q_bias = Parameter(torch.empty(d_model))
+        self.k_bias = Parameter(torch.empty(d_model))
+        self.v_bias = Parameter(torch.empty(d_model))
 
-        tgt_embeddings = self.embedding(tgt)
+        self.out_proj = Linear(d_model, d_model)
 
-        output = self.decoder(tgt_embeddings, memory)
-        output = F.linear(output, self.embedding.weight, self.output_bias)
+        self._reset_parameters()
 
-        return output
+    def _reset_parameters(self):
+        init.xavier_uniform_(self.q_proj_weight)
+        init.xavier_uniform_(self.k_proj_weight)
+        init.xavier_uniform_(self.v_proj_weight)
+
+        init.constant_(self.q_bias, 0.0)
+        init.constant_(self.k_bias, 0.0)
+        init.constant_(self.v_bias, 0.0)
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor):
+
+        tgt_len, batch_size, d_model = query.size()
+        # get projected versions of all three Tensors
+        q_proj = F.linear(query, self.q_proj_weight, self.q_bias)
+        k_proj = F.linear(key, self.k_proj_weight, self.k_bias)
+        v_proj = F.linear(value, self.v_proj_weight, self.v_bias)
+
+        # transpose q from [T, N, E] to [N * H, T, E / H]
+        q_proj = (
+            q_proj.contiguous()  # unnecessary
+            .view(tgt_len, batch_size * self.nhead, self.head_dim)
+            .transpose(0, 1)
+        )
+
+        # transpose k so that last two dimensions are [src_len, d_model / nhead]
+        k_proj = (
+            k_proj.contiguous()  # unnecessary
+            .view(-1, batch_size * self.nhead, self.head_dim)
+            .transpose(0, 1)
+        )
+
+        # transpose v so that last two dimensions are [src_len, d_model / nhead]
+        v_proj = (
+            v_proj.contiguous()  # unnecessary
+            .view(-1, batch_size * self.nhead, self.head_dim)
+            .transpose(0, 1)
+        )
+
+        q_proj *= float(self.head_dim) ** -0.5
+
+        # "T" - works because k is three dimensional
+        src_len = k_proj.size(1)
+
+        # compute attention output weights
+        # q_proj shape: batch_size * num_heads, tgt_len, d_model / nhead
+        # k_proj.transpose(1, 2) shape: batch_size * num_heads, src_len, d_model / nhead
+        # shape: batch_size * num_heads, tgt_len, src_len
+        attn_output_weights = torch.bmm(q_proj, k_proj.transpose(1, 2))
+
+        # apply softmax so that values along src_len dimension add to 1
+        attn_output_weights = F.softmax(attn_output_weights, dim=-1)
+
+        # dropout
+        attn_output_weights = F.dropout(attn_output_weights, p=self.dropout)
+
+        # use these weights to compute a weighted average of the values
+        # attn_output shape: batch_size * num_heads x tgt_len x d_model / nhead
+        attn_output = torch.bmm(attn_output_weights, v_proj)
+
+        # use these weights to compute a weighted average of the values
+        attn_output = (
+            attn_output.transpose(0, 1)  # puts tgt_len as first dimension
+            .contiguous()  # unnecessary
+            .view(tgt_len, batch_size, d_model)  # reshape to size of output
+        )
+
+        attn_output = self.out_proj(attn_output)
+
+        return attn_output
+
+
+class TransformerEncoderLayerCustom2(TransformerEncoderLayerCustom):
+    def __init__(
+        self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout=0.1
+    ) -> None:
+        super(TransformerEncoderLayerCustom2, self).__init__(d_model, nhead)
+        self.self_attn = MultiheadAttentionCustom(d_model, nhead, dropout=0.1)
+
+        self.linear1 = Linear(d_model, dim_feedforward)
+        self.dropout = Dropout(dropout)
+        self.linear2 = Linear(dim_feedforward, d_model)
+
+        self.norm1 = LayerNorm(d_model)
+        self.norm2 = LayerNorm(d_model)
+
+        self.dropout1 = Dropout(dropout)
+        self.dropout2 = Dropout(dropout)
+
+
+class TransformerDecoderLayerCustom2(TransformerDecoderLayerCustom):
+    def __init__(
+        self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout=0.1
+    ) -> None:
+        super(TransformerDecoderLayerCustom2, self).__init__(d_model, nhead)
+        self.self_attn = MultiheadAttentionCustom(d_model, nhead, dropout=dropout)
+        self.multihead_attn = MultiheadAttentionCustom(d_model, nhead, dropout=dropout)
+
+        self.linear1 = Linear(d_model, dim_feedforward)
+        self.dropout = Dropout(dropout)
+        self.linear2 = Linear(dim_feedforward, d_model)
+
+        self.norm1 = LayerNorm(d_model)
+        self.norm2 = LayerNorm(d_model)
+        self.norm3 = LayerNorm(d_model)
+
+        self.dropout1 = Dropout(dropout)
+        self.dropout2 = Dropout(dropout)
+        self.dropout3 = Dropout(dropout)
+
+
+class Transformer5(Transformer4):
+    def __init__(
+        self,
+        d_model: int,
+        nhead: int,
+        vocab_size: int,
+        max_len: int,
+        num_encoder_layers: int = 6,
+        num_decoder_layers: int = 6,
+    ) -> None:
+        super(Transformer5, self).__init__(d_model, nhead, vocab_size, max_len)
+
+        encoder_layer = TransformerEncoderLayerCustom2(d_model=d_model, nhead=nhead)
+        decoder_layer = TransformerDecoderLayerCustom2(d_model=d_model, nhead=nhead)
+
+        self.encoder = TransformerEncoderCustom(encoder_layer, num_encoder_layers)
+        self.decoder = TransformerDecoderCustom(decoder_layer, num_decoder_layers)
+
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(d_model, max_len)
+
+        self.output_bias = Parameter(torch.Tensor(vocab_size))
+        self._init_bias()
 
 
 def _get_clones(module: nn.Module, N: int) -> ModuleList:

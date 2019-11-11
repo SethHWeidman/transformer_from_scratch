@@ -8,6 +8,7 @@ from transformer_from_scratch.transformer import (
     Transformer2,
     Transformer3,
     Transformer4,
+    Transformer5,
 )
 
 # source sequence length
@@ -42,6 +43,7 @@ tgt2 = torch.randint(low=0, high=V, size=(T, N))
 t2 = Transformer2(d_model=E, nhead=H, vocab_size=V, max_len=T)
 t3 = Transformer3(d_model=E, nhead=H, vocab_size=V, max_len=T)
 t4 = Transformer4(d_model=E, nhead=H, vocab_size=V, max_len=T)
+t5 = Transformer5(d_model=E, nhead=H, vocab_size=V, max_len=T)
 
 
 def test_transformer():
@@ -60,5 +62,9 @@ def test_transformer_3():
     assert (t3(src2, tgt2).shape) == torch.Size([T, N, V])
 
 
-def test_transformer_3():
+def test_transformer_4():
     assert (t4(src2, tgt2).shape) == torch.Size([T, N, V])
+
+
+def test_transformer_5():
+    assert (t5(src2, tgt2).shape) == torch.Size([T, N, V])
