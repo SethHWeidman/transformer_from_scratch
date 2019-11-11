@@ -156,6 +156,7 @@ class Transformer2(nn.Module):
 
         return output
 
+
 class TransformerEncoderCustom(nn.Module):
     def __init__(self, encoder_layer: nn.Module, num_layers: int) -> None:
         super(TransformerEncoderCustom, self).__init__()
@@ -234,6 +235,7 @@ class Transformer3(nn.Module):
         output = F.linear(output, self.embedding.weight, self.output_bias)
 
         return output
+
 
 class TransformerEncoderLayerCustom(nn.Module):
     def __init__(
