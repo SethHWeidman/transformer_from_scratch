@@ -412,7 +412,7 @@ class MultiheadAttentionCustom(nn.Module):
 
         attn_output = self.out_proj(attn_output)
 
-        return attn_output
+        return (attn_output,)
 
 
 class TransformerEncoderLayerCustom2(TransformerEncoderLayerCustom):
@@ -464,7 +464,9 @@ class Transformer5(Transformer4):
         num_encoder_layers: int = 6,
         num_decoder_layers: int = 6,
     ) -> None:
-        super(Transformer5, self).__init__(d_model, nhead, vocab_size, max_len)
+        super(Transformer5, self).__init__(
+            d_model, nhead, vocab_size, max_len, num_encoder_layers, num_decoder_layers
+        )
 
         encoder_layer = TransformerEncoderLayerCustom2(d_model=d_model, nhead=nhead)
         decoder_layer = TransformerDecoderLayerCustom2(d_model=d_model, nhead=nhead)
@@ -477,6 +479,316 @@ class Transformer5(Transformer4):
 
         self.output_bias = Parameter(torch.Tensor(vocab_size))
         self._init_bias()
+
+
+class TransformerDecoderCustom2(TransformerDecoderCustom):
+    def __init__(self, decoder_layer: nn.Module, num_layers: int) -> None:
+        super(TransformerDecoderCustom2, self).__init__(decoder_layer, num_layers)
+
+    def forward(
+        self,
+        tgt: Tensor,
+        memory: Tensor,
+        tgt_mask: Tensor = None,
+        tgt_key_padding_mask: Tensor = None,
+        memory_mask: Tensor = None,
+        memory_key_padding_mask: Tensor = None,
+    ) -> None:
+
+        out = tgt
+
+        for i in range(self.num_layers):
+            output = self.layers[i](
+                tgt,
+                memory,
+                tgt_mask=tgt_mask,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_mask=memory_mask,
+                memory_key_padding_mask=memory_key_padding_mask,
+            )
+
+        return out
+
+
+class TransformerEncoderCustom2(TransformerEncoderCustom):
+    def __init__(self, encoder_layer: nn.Module, num_layers: int) -> None:
+        super(TransformerEncoderCustom2, self).__init__(encoder_layer, num_layers)
+
+    def forward(
+        self, x: Tensor, attn_mask: Tensor = None, key_padding_mask: Tensor = None
+    ) -> None:
+
+        out = x
+
+        for i in range(self.num_layers):
+            out = self.layers[i](
+                out, attn_mask=attn_mask, key_padding_mask=key_padding_mask
+            )
+
+        return out
+
+
+class TransformerDecoderLayerCustom3(TransformerDecoderLayerCustom2):
+    def __init__(
+        self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout=0.1
+    ) -> None:
+        super(TransformerDecoderLayerCustom3, self).__init__(
+            d_model, nhead, dim_feedforward, dropout
+        )
+        self.self_attn = MultiheadAttentionCustom2(d_model, nhead, dropout=dropout)
+        self.multihead_attn = MultiheadAttentionCustom2(d_model, nhead, dropout=dropout)
+
+        self.linear1 = Linear(d_model, dim_feedforward)
+        self.dropout = Dropout(dropout)
+        self.linear2 = Linear(dim_feedforward, d_model)
+
+        self.norm1 = LayerNorm(d_model)
+        self.norm2 = LayerNorm(d_model)
+        self.norm3 = LayerNorm(d_model)
+
+        self.dropout1 = Dropout(dropout)
+        self.dropout2 = Dropout(dropout)
+        self.dropout3 = Dropout(dropout)
+
+    def forward(
+        self,
+        tgt: Tensor,
+        memory: Tensor,
+        tgt_mask: Tensor = None,
+        tgt_key_padding_mask: Tensor = None,
+        memory_mask: Tensor = None,
+        memory_key_padding_mask: Tensor = None,
+    ) -> Tensor:
+
+        tgt2 = self.self_attn(tgt, tgt, tgt, tgt_mask, tgt_key_padding_mask)[0]
+
+        tgt = tgt + self.dropout1(tgt2)
+
+        tgt = self.norm1(tgt)
+
+        tgt = self.multihead_attn(
+            tgt, memory, memory, memory_mask, memory_key_padding_mask
+        )[0]
+
+        tgt = tgt + self.dropout(tgt2)
+
+        tgt = self.norm2(tgt)
+
+        tgt = self.linear2(self.dropout(F.relu(self.linear1(tgt))))
+
+        tgt = tgt + self.dropout3(tgt2)
+
+        tgt = self.norm3(tgt)
+
+        return tgt
+
+
+class TransformerEncoderLayerCustom3(TransformerEncoderLayerCustom2):
+    def __init__(
+        self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout=0.1
+    ) -> None:
+        super(TransformerEncoderLayerCustom3, self).__init__(
+            d_model, nhead, dim_feedforward, dropout
+        )
+        self.self_attn = MultiheadAttentionCustom2(d_model, nhead, dropout=dropout)
+
+        self.linear1 = Linear(d_model, dim_feedforward)
+        self.dropout = Dropout(dropout)
+        self.linear2 = Linear(dim_feedforward, d_model)
+
+        self.norm1 = LayerNorm(d_model)
+        self.norm2 = LayerNorm(d_model)
+
+        self.dropout1 = Dropout(dropout)
+        self.dropout2 = Dropout(dropout)
+
+    def forward(
+        self, src: Tensor, attn_mask: Tensor = None, key_padding_mask: Tensor = None
+    ) -> Tensor:
+
+        src2 = self.self_attn(
+            src, src, src, attn_mask=attn_mask, key_padding_mask=key_padding_mask
+        )[0]
+        src = src + self.dropout1(src2)
+
+        src = self.norm1(src)
+
+        src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+
+        src = src + self.dropout2(src2)
+
+        src = self.norm2(src)
+
+        return src
+
+
+class MultiheadAttentionCustom2(MultiheadAttentionCustom):
+    def __init__(
+        self, d_model: int, nhead: int, dropout: float = 0.0,
+    ):
+        super(MultiheadAttentionCustom2, self).__init__(d_model, nhead, dropout)
+
+    def forward(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        attn_mask: Tensor = None,
+        key_padding_mask: Tensor = None,
+    ) -> Tensor:
+
+        tgt_len, batch_size, d_model = query.size()
+        # get projected versions of all three Tensors
+        q_proj = F.linear(query, self.q_proj_weight, self.q_bias)
+        k_proj = F.linear(key, self.k_proj_weight, self.k_bias)
+        v_proj = F.linear(value, self.v_proj_weight, self.v_bias)
+
+        # transpose q from [T, N, E] to [N * H, T, E / H]
+        q_proj = (
+            q_proj.contiguous()  # unnecessary
+            .view(tgt_len, batch_size * self.nhead, self.head_dim)
+            .transpose(0, 1)
+        )
+
+        # transpose k so that last two dimensions are [src_len, d_model / nhead]
+        k_proj = (
+            k_proj.contiguous()  # unnecessary
+            .view(-1, batch_size * self.nhead, self.head_dim)
+            .transpose(0, 1)
+        )
+
+        # transpose v so that last two dimensions are [src_len, d_model / nhead]
+        v_proj = (
+            v_proj.contiguous()  # unnecessary
+            .view(-1, batch_size * self.nhead, self.head_dim)
+            .transpose(0, 1)
+        )
+
+        q_proj *= float(self.head_dim) ** -0.5
+
+        # "T" - works because k is three dimensional
+        src_len = k_proj.size(1)
+
+        if key_padding_mask is not None:
+            assert key_padding_mask.size(0) == batch_size
+            assert key_padding_mask.size(1) == src_len
+
+        # compute attention output weights
+        # q_proj shape: batch_size * num_heads, tgt_len, d_model / nhead
+        # k_proj.transpose(1, 2) shape: batch_size * num_heads, src_len, d_model / nhead
+        # shape: batch_size * num_heads, tgt_len, src_len
+        attn_output_weights = torch.bmm(q_proj, k_proj.transpose(1, 2))
+
+        # attn_mask is two dimensional Tensor of shape tgt_len x src_len
+        if attn_mask is not None:
+            attn_mask = attn_mask.unsqueeze(0)
+            attn_output_weights += attn_mask
+
+        # key padding mask is two dimensional Tensor of shape batch size, src sequence length
+        if key_padding_mask is not None:
+            # need to "unravel" this to get batch size and src_len isolated
+            attn_output_weights = attn_output_weights.view(
+                batch_size, nhead, tgt_len, src_len
+            )
+
+            attn_output_weights = attn_output_weights.masked_fill(
+                key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf")
+            )
+            attn_output_weights = attn_output_weights.view(
+                batch_size * nhead, tgt_len, src_len
+            )
+
+        # apply softmax so that values along src_len dimension add to 1
+        attn_output_weights = F.softmax(attn_output_weights, dim=-1)
+
+        # dropout
+        attn_output_weights = F.dropout(attn_output_weights, p=self.dropout)
+
+        # use these weights to compute a weighted average of the values
+        # attn_output shape: batch_size * num_heads x tgt_len x d_model / nhead
+        attn_output = torch.bmm(attn_output_weights, v_proj)
+
+        # use these weights to compute a weighted average of the values
+        attn_output = (
+            attn_output.transpose(0, 1)  # puts tgt_len as first dimension
+            .contiguous()  # unnecessary
+            .view(tgt_len, batch_size, d_model)  # reshape to size of output
+        )
+
+        attn_output = self.out_proj(attn_output)
+
+        return attn_output
+
+
+class Transformer6(Transformer5):
+    def __init__(
+        self,
+        d_model: int,
+        nhead: int,
+        vocab_size: int,
+        max_len: int,
+        num_encoder_layers: int = 6,
+        num_decoder_layers: int = 6,
+    ) -> None:
+        super(Transformer6, self).__init__(d_model, nhead, vocab_size, max_len)
+
+        encoder_layer = TransformerEncoderLayerCustom3(d_model=d_model, nhead=nhead)
+        decoder_layer = TransformerDecoderLayerCustom3(d_model=d_model, nhead=nhead)
+
+        self.encoder = TransformerEncoderCustom2(encoder_layer, num_encoder_layers)
+        self.decoder = TransformerDecoderCustom2(decoder_layer, num_decoder_layers)
+
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(d_model, max_len)
+
+        self.output_bias = Parameter(torch.Tensor(vocab_size))
+        self._init_bias()
+
+    def forward(
+        self,
+        src: Tensor,
+        tgt: Tensor,
+        src_mask: Tensor = None,
+        tgt_mask: Tensor = None,
+        memory_mask: Tensor = None,
+        src_key_padding_mask: Tensor = None,
+        tgt_key_padding_mask: Tensor = None,
+        memory_key_padding_mask: Tensor = None,
+    ) -> Tensor:
+
+        embeddings = self.embedding(src)
+
+        positional_encoding = self.positional_encoding(embeddings)
+
+        memory = self.encoder(
+            positional_encoding,
+            attn_mask=src_mask,
+            key_padding_mask=src_key_padding_mask,
+        )
+
+        tgt_embeddings = self.embedding(tgt)
+
+        output = self.decoder(
+            tgt_embeddings,
+            memory,
+            tgt_mask=tgt_mask,
+            memory_mask=memory_mask,
+            tgt_key_padding_mask=tgt_key_padding_mask,
+            memory_key_padding_mask=memory_key_padding_mask,
+        )
+        output = F.linear(output, self.embedding.weight, self.output_bias)
+
+        return output
+
+
+def _generate_square_subsequent_mask(sz: int):
+    mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+    mask = (
+        mask.float()
+        .masked_fill(mask == 0, float("-inf"))
+        .masked_fill(mask == 1, float(0.0))
+    )
+    return mask
 
 
 def _get_clones(module: nn.Module, N: int) -> ModuleList:

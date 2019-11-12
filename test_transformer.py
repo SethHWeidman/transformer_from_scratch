@@ -9,7 +9,10 @@ from transformer_from_scratch.transformer import (
     Transformer3,
     Transformer4,
     Transformer5,
+    Transformer6,
 )
+
+from transformer_from_scratch.transformer import _generate_square_subsequent_mask
 
 # source sequence length
 S = 10
@@ -44,6 +47,7 @@ t2 = Transformer2(d_model=E, nhead=H, vocab_size=V, max_len=T)
 t3 = Transformer3(d_model=E, nhead=H, vocab_size=V, max_len=T)
 t4 = Transformer4(d_model=E, nhead=H, vocab_size=V, max_len=T)
 t5 = Transformer5(d_model=E, nhead=H, vocab_size=V, max_len=T)
+t6 = Transformer6(d_model=E, nhead=H, vocab_size=V, max_len=T)
 
 
 def test_transformer():
@@ -68,3 +72,18 @@ def test_transformer_4():
 
 def test_transformer_5():
     assert (t5(src2, tgt2).shape) == torch.Size([T, N, V])
+
+
+# for sequence to sequence, every element of src can look at
+# every element of src. But, while each element of trg can
+# look at every element of src, it can only look at the future
+# elements of trg
+
+# To do a language model with this, on the other hand, each element of src
+# can only look at past elements of src.
+
+tgt_mask = _generate_square_subsequent_mask(T)
+
+
+def test_transformer_6():
+    assert (t6(src2, tgt2, tgt_mask=tgt_mask).shape) == torch.Size([T, N, V])
